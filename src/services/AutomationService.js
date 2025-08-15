@@ -1,4 +1,5 @@
 const puppeteer = require("puppeteer");
+const axios = require("axios");
 const LogService = require("./LogService");
 const DatabaseService = require("./DatabaseService");
 
@@ -35,69 +36,169 @@ class AutomationService {
     };
   }
 
+  setSocketIO(io) {
+    this.io = io;
+    LogService.log("info", "Socket.IO instance set for AutomationService");
+  }
+
   // Function to get package name from redimension code
   getPackageFromCode(code) {
     const codePrefix = code.split("-").slice(0, 3).join("-"); // Get BDMB-J-S part
     return this.codeMapping[codePrefix];
   }
 
-  async initBrowser() {
-    if (!this.browser) {
-      LogService.log("info", "Initializing The Automation...");
+  // Create a new browser instance with visual Chrome connection
+  async createNewBrowser() {
+    try {
+      LogService.log("info", "🎯 VISUAL BROWSER SETUP:");
+      LogService.log(
+        "info",
+        "The Chrome browser is running in a visual container that you can access at:"
+      );
+      LogService.log("info", "👀 http://localhost:4100/");
+      LogService.log("info", "");
+      LogService.log("info", "What this means:");
+      LogService.log(
+        "info",
+        "1. Open http://localhost:4100/ in your regular browser"
+      );
+      LogService.log(
+        "info",
+        "2. You'll see a Chrome browser interface running in a container"
+      );
+      LogService.log(
+        "info",
+        "3. You can click, type, or interact with the browser at any time"
+      );
+      LogService.log(
+        "info",
+        "4. The automation will continue to run alongside your interactions"
+      );
+      LogService.log("info", "");
+
+      // Try to connect to visual Chrome container
+      LogService.log("info", "🔄 Connecting to visual Chrome browser...");
+
       try {
-        this.browser = await puppeteer.launch({
-          headless: process.env.HEADLESS !== "false", // Default to headless
-          args: [
-            "--no-sandbox",
-            "--disable-setuid-sandbox",
-            "--disable-dev-shm-usage",
-            "--disable-accelerated-2d-canvas",
-            "--no-first-run",
-            "--no-zygote",
-            "--disable-gpu",
-            "--disable-web-security",
-            "--disable-features=VizDisplayCompositor",
-            "--disable-background-timer-throttling",
-            "--disable-backgrounding-occluded-windows",
-            "--disable-renderer-backgrounding",
-            "--disable-extensions",
-            "--disable-plugins",
-            "--disable-default-apps",
-            "--disable-hang-monitor",
-            "--disable-popup-blocking",
-            "--disable-prompt-on-repost",
-            "--disable-sync",
-            "--disable-translate",
-            "--disable-ipc-flooding-protection",
-            "--window-size=1366,768",
-          ],
+        LogService.log(
+          "info",
+          "Attempting connection to visual Chrome via socat proxy..."
+        );
+
+        // First get the WebSocket URL via socat proxy with correct Host header
+        const response = await axios.get(
+          "http://chromium-browser:9223/json/version",
+          {
+            headers: {
+              Host: "localhost:9222", // Chrome requires this specific host header
+            },
+            timeout: 5000,
+          }
+        );
+
+        const data = response.data;
+        let wsUrl = data.webSocketDebuggerUrl;
+
+        // Replace localhost:9222 with chromium-browser:9223 for inter-container communication
+        wsUrl = wsUrl.replace(
+          "ws://localhost:9222",
+          "ws://chromium-browser:9223"
+        );
+
+        LogService.log("info", `Found WebSocket URL: ${wsUrl}`);
+
+        // Connect using the WebSocket endpoint
+        const browser = await puppeteer.connect({
+          browserWSEndpoint: wsUrl,
           defaultViewport: null,
-          timeout: 60000,
         });
 
-        // Add browser disconnect handler
-        this.browser.on("disconnected", () => {
-          LogService.log("warning", "Browser disconnected unexpectedly");
-          this.browser = null;
+        browser.on("disconnected", () => {
+          LogService.log("info", "Visual Chrome browser disconnected");
         });
 
-        LogService.log("info", "Automation initialized successfully");
+        LogService.log("info", "✅ Successfully connected to visual Chrome!");
+        LogService.log(
+          "info",
+          "🎯 Automation will run in the visual browser at http://localhost:4100/"
+        );
+        return browser;
       } catch (error) {
-        LogService.log("error", "Failed to initialize browser", {
+        LogService.log("error", "Cannot connect to visual Chrome", {
           error: error.message,
         });
-        throw new Error(`Browser initialization failed: ${error.message}`);
+
+        // Provide helpful information about the visual browser
+        LogService.log("info", "");
+        LogService.log("info", "🌐 VISUAL BROWSER ACCESS:");
+        LogService.log(
+          "info",
+          "Even though automation connection failed, you can still:"
+        );
+        LogService.log(
+          "info",
+          "• Open http://localhost:4100/ to see the Chrome browser"
+        );
+        LogService.log(
+          "info",
+          "• Manually navigate and interact with websites"
+        );
+        LogService.log(
+          "info",
+          "• The visual browser is fully functional for manual use"
+        );
+        LogService.log("info", "");
+        LogService.log("info", "📋 TECHNICAL NOTE:");
+        LogService.log(
+          "info",
+          "Chrome's remote debugging port (9222) binds only to localhost inside containers"
+        );
+        LogService.log(
+          "info",
+          "This is a security feature that prevents cross-container access"
+        );
+        LogService.log(
+          "info",
+          "Your visual browser at http://localhost:4100/ is still fully accessible!"
+        );
+
+        throw new Error(`Chrome connection failed: ${error.message}. 
+
+🎯 VISUAL BROWSER AVAILABLE: http://localhost:4100/
+You can manually use the browser while we work on the connection issue.
+
+This is a technical limitation where Chrome's debugging port doesn't allow 
+external connections for security reasons.`);
+      }
+    } catch (error) {
+      throw error;
+    }
+  }
+
+  async closeBrowserInstance(browser) {
+    if (browser) {
+      try {
+        LogService.log("info", "Disconnecting from visual Chrome browser...");
+        await browser.disconnect();
+        LogService.log("info", "Browser disconnected successfully");
+      } catch (error) {
+        LogService.log("warning", "Error disconnecting browser", {
+          error: error.message,
+        });
       }
     }
-    return this.browser;
+  }
+
+  // Legacy method for compatibility - now creates new browser each time
+  async initBrowser() {
+    return await this.createNewBrowser();
   }
 
   async closeBrowser() {
+    // For visual browser setup, we disconnect instead of closing
     if (this.browser) {
-      LogService.log("info", "Closing browser...");
-      await this.browser.close();
+      await this.closeBrowserInstance(this.browser);
       this.browser = null;
-      LogService.log("info", "Browser closed");
     }
   }
 
@@ -185,12 +286,13 @@ class AutomationService {
     );
 
     let page = null; // Declare page variable for proper cleanup
+    let browser = null;
 
     try {
       // Check cancellation before starting
       await this.checkCancellation(requestId);
 
-      const browser = await this.initBrowser();
+      browser = await this.createNewBrowser();
       page = await browser.newPage();
 
       // Store page reference in job info for cancellation
@@ -545,7 +647,7 @@ class AutomationService {
           metadata: {
             username,
             packageName,
-            browser: "puppeteer",
+            browser: "visual-chrome",
           },
         });
       } catch (dbError) {
@@ -564,9 +666,6 @@ class AutomationService {
         status: jobInfo.status,
         endTime: jobInfo.endTime,
       });
-
-      // Emit job update event
-      this.emitJobUpdate("completed", jobInfo);
 
       return {
         success: true,
@@ -654,7 +753,7 @@ class AutomationService {
             errorMessage: error.message,
             screenshotPath: errorScreenshotPath,
             metadata: {
-              browser: "puppeteer",
+              browser: "visual-chrome",
               errorType: error.constructor.name,
             },
           });
@@ -684,54 +783,6 @@ class AutomationService {
 
         throw error;
       }
-
-      // Update job status
-      jobInfo.status = "failed";
-      jobInfo.endTime = endTime;
-      jobInfo.error = error.message;
-
-      // Emit job failed event
-      this.emitJobUpdate("failed", jobInfo);
-
-      // Update database with error handling
-      try {
-        await DatabaseService.updateAutomationResult(requestId, {
-          status: "failed",
-          endTime,
-          duration,
-          success: false,
-          errorMessage: error.message,
-          screenshotPath: errorScreenshotPath,
-          metadata: {
-            browser: "puppeteer",
-            errorType: error.constructor.name,
-          },
-        });
-      } catch (dbError) {
-        await this.logMessage(
-          requestId,
-          "warning",
-          "Failed to update database error result",
-          {
-            error: dbError.message,
-          }
-        );
-      }
-
-      await this.logMessage(requestId, "info", "Job marked as failed", {
-        requestId,
-        status: jobInfo.status,
-        endTime: jobInfo.endTime,
-        error: error.message,
-      });
-
-      // Clean up old completed jobs from memory
-      this.cleanupCompletedJobs();
-
-      // Emit job update event
-      this.emitJobUpdate("failed", jobInfo);
-
-      throw error;
     } finally {
       // Close the page if it exists
       if (page) {
@@ -744,20 +795,16 @@ class AutomationService {
         }
       }
 
-      // Close the browser after each job
-      await this.closeBrowser();
+      // Disconnect from the visual browser
+      if (browser) {
+        await this.closeBrowserInstance(browser);
+      }
 
       // Clean up running job after delay (keep job info for 5 minutes for status checking)
       setTimeout(() => {
         this.runningJobs.delete(requestId);
       }, 300000); // Keep job info for 5 minutes
     }
-  }
-
-  // Set Socket.IO instance for real-time updates
-  setSocketIO(io) {
-    this.io = io;
-    LogService.log("info", "Socket.IO instance set for AutomationService");
   }
 
   // Emit job status update to connected clients
